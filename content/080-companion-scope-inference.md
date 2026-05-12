@@ -8,7 +8,7 @@ stage: design
 status: under-review
 number: 80
 presip-thread: https://contributors.scala-lang.org/t/relative-scoping-for-hierarchical-adt-arguments/4136
-title: Companion Inference
+title: Companion Scope Inference
 ---
 
 **By: Oron Port**
@@ -23,7 +23,7 @@ This is an alternative draft of SIP-80, proposing a sigil-free design alongside 
 
 ## Summary
 
-We propose **companion inference**: when an identifier `X` cannot be resolved through normal name lookup, *and* the surrounding position has a known expected type `T`, the compiler searches `T`'s companion module for a term-level member named `X`. If such a member is found, the use site is treated as if the user had written `T.X` explicitly.
+We propose **companion scope inference**: when an identifier `X` cannot be resolved through normal name lookup, *and* the surrounding position has a known expected type `T`, the compiler searches `T`'s companion module for a term-level member named `X`. If such a member is found, the use site is treated as if the user had written `T.X` explicitly.
 
 ```scala
 final case class Shape(geometry: Shape.Geometry, color: Shape.Color)
@@ -78,7 +78,7 @@ The three workarounds in current Scala (fully qualified names; wildcard imports;
 
 ### Why a sigil-free design?
 
-The `#X` draft of this SIP addresses the same problem with a leading sigil. The principal review feedback on that draft can be summarised as: *"we like the semantics, but we do not want to introduce another piece of symbolic syntax at the use site"* (Martin Odersky, [PR #134 comment, 6 May 2026](https://github.com/scala/improvement-proposals/pull/134#issuecomment-4386656170), and later acknowledgement that data-heavy applications do pose verbosity problems, [12 May 2026](https://github.com/scala/improvement-proposals/pull/134#issuecomment-4407023044)). Companion inference accepts that constraint and asks the dual question: *can the compiler do the lookup with no surface marker at all, paid for only by giving up the visual anchor that `#X` provides?*
+The `#X` draft of this SIP addresses the same problem with a leading sigil. The principal review feedback on that draft can be summarised as: *"we like the semantics, but we do not want to introduce another piece of symbolic syntax at the use site"* (Martin Odersky, [PR #134 comment, 6 May 2026](https://github.com/scala/improvement-proposals/pull/134#issuecomment-4386656170), and later acknowledgement that data-heavy applications do pose verbosity problems, [12 May 2026](https://github.com/scala/improvement-proposals/pull/134#issuecomment-4407023044)). Companion scope inference accepts that constraint and asks the dual question: *can the compiler do the lookup with no surface marker at all, paid for only by giving up the visual anchor that `#X` provides?*
 
 The trade-off this proposal makes:
 
@@ -101,7 +101,7 @@ The proposal's task is to make those costs as small as practical via the diagnos
 
 The rule is a single addition to name resolution:
 
-1. **Try normal name lookup.** If the identifier resolves through any existing rule — lexical scope, imports, exports, package members, etc. — that resolution wins. Companion inference does not change the meaning of any program that compiles today.
+1. **Try normal name lookup.** If the identifier resolves through any existing rule — lexical scope, imports, exports, package members, etc. — that resolution wins. Companion scope inference does not change the meaning of any program that compiles today.
 2. **If normal lookup fails and the position has a known expected type `T`**, reduce `T` to a target type `T'` using the same machinery shared with the `#X` draft (strip prototypes, dealias, drop refinements, take the principal class, carve out `T | Null`). Look up the identifier as a *term-level* member of `T'`'s companion.
 3. **If found**, use the member as if the user had written `T'.X` explicitly. The resolved expression is then re-typed by the language's normal `Select` machinery, including implicit conversions.
 4. **If still not found**, emit a "not found" error enriched with the companions searched (see *Diagnostics*).
@@ -131,14 +131,14 @@ It does *not* apply to:
 
 Given an identifier `X` and a use site whose expected type is `T`, the compiler resolves `X` in this order:
 
-1. **Normal resolution.** Apply the existing Scala name-resolution rules (lexical scope, imports, exports, package members, inherited members, etc.). If a unique result is found, use it. If an *ambiguity* is found, raise the existing ambiguity error — companion inference does not bypass ambiguity diagnostics.
+1. **Normal resolution.** Apply the existing Scala name-resolution rules (lexical scope, imports, exports, package members, inherited members, etc.). If a unique result is found, use it. If an *ambiguity* is found, raise the existing ambiguity error — companion scope inference does not bypass ambiguity diagnostics.
 2. **Target-type reduction** (only if step 1 found no candidate). Compute `T'` from `T`:
    1. Strip prototype layers.
    2. Dealias transparent type aliases.
    3. Drop dependent refinements.
    4. Take the principal class component, if `T` is a refined or intersection type.
    5. Drop `Null` arms from `T | Null` / `Null | T` unions (recursively).
-   If `T'` has no companion module — for example an unconstrained abstract type, a type parameter, a bare trait without a companion, a function/SAM type, or a non-`Null` union type `A | B` — companion inference does not fire. The position is then a "not found" error.
+   If `T'` has no companion module — for example an unconstrained abstract type, a type parameter, a bare trait without a companion, a function/SAM type, or a non-`Null` union type `A | B` — companion scope inference does not fire. The position is then a "not found" error.
 3. **Companion lookup.** Look up `X` as a *term-level* member of `T'`'s companion object. For an opaque type alias, the alias's *own* companion is searched (the underlying type's companion is *not* consulted from outside the module that defines the alias). Anonymous givens are not eligible candidates; named givens are.
 4. **Re-typing.** The desugared form `T'.X` is then re-typed by the language's regular `Select` machinery, so:
    - implicit conversions are inserted to bridge the candidate's type to the surrounding expected type;
@@ -150,7 +150,7 @@ Only the static expected type's companion is searched, not its supertypes' compa
 
 ##### Nullable expected types
 
-The `T | Null` carve-out is the only union form for which companion inference fires. `T | Null` is the canonical representation of nullable references under explicit-nulls, and there is no ambiguity about which side carries the companion — `Null` has none.
+The `T | Null` carve-out is the only union form for which companion scope inference fires. `T | Null` is the canonical representation of nullable references under explicit-nulls, and there is no ambiguity about which side carries the companion — `Null` has none.
 
 ```scala
 val c1: Color | Null   = Red               // OK — reduces to Color
@@ -169,7 +169,7 @@ c match
   case Green      => "secondary"
 ```
 
-The lower-case-binder vs. constant-reference rule of current Scala is preserved. `case red` still binds a fresh variable; only capitalised identifiers (or back-ticked ones) are subject to companion inference, because only those reference rather than bind.
+The lower-case-binder vs. constant-reference rule of current Scala is preserved. `case red` still binds a fresh variable; only capitalised identifiers (or back-ticked ones) are subject to companion scope inference, because only those reference rather than bind.
 
 #### Application form: `X(args)`
 
@@ -183,15 +183,15 @@ object Frag:
 
 def render(frag: Frag): String = ???
 
-render(color("red"))    // companion inference: color → Frag.color
-render(text("hi"))      // companion inference: text → Frag.text
+render(color("red"))    // companion scope inference: color → Frag.color
+render(text("hi"))      // companion scope inference: text → Frag.text
 ```
 
-The companion's `apply` method is not given special status. `Color(20, 5, 100)` already works under existing Scala rules because `Color` is a type in scope, so its companion's `apply` is reached by the standard apply-method dispatch. Inside an enclosing scope where bare `apply` resolves to *some other* `apply` (for example a containing `object Foo`), companion inference does not silently rescue the call site; the user qualifies the call as `Color.apply(...)` or `Color(...)` explicitly. This is the same disambiguation step the language already requires when two methods named `apply` are visible.
+The companion's `apply` method is not given special status. `Color(20, 5, 100)` already works under existing Scala rules because `Color` is a type in scope, so its companion's `apply` is reached by the standard apply-method dispatch. Inside an enclosing scope where bare `apply` resolves to *some other* `apply` (for example a containing `object Foo`), companion scope inference does not silently rescue the call site; the user qualifies the call as `Color.apply(...)` or `Color(...)` explicitly. This is the same disambiguation step the language already requires when two methods named `apply` are visible.
 
 #### Chaining: `Mammal.Dog`
 
-Companion inference applies to the *leftmost* identifier in a chained selection. Subsequent segments are ordinary path selection on the resulting value:
+Companion scope inference applies to the *leftmost* identifier in a chained selection. Subsequent segments are ordinary path selection on the resulting value:
 
 ```scala
 sealed trait Animal
@@ -217,11 +217,11 @@ a match
   case _          => "other"
 ```
 
-If the leftmost identifier *is* in scope as something else (a local `Mammal`, an unrelated import), normal resolution wins and companion inference does not fire — the user qualifies explicitly with `Animal.Mammal.Dog`. See *Compatibility → Silent shadowing*.
+If the leftmost identifier *is* in scope as something else (a local `Mammal`, an unrelated import), normal resolution wins and companion scope inference does not fire — the user qualifies explicitly with `Animal.Mammal.Dog`. See *Compatibility → Silent shadowing*.
 
 #### `using` clauses
 
-For consistency with regular argument clauses, companion inference is allowed inside `using` argument clauses:
+For consistency with regular argument clauses, companion scope inference is allowed inside `using` argument clauses:
 
 ```scala
 def f(using c: Color): Unit = ???
@@ -231,11 +231,11 @@ f(using Red)               // Red resolves against the using parameter's
 
 #### Type-argument position
 
-Not supported in this SIP. Type-level companion inference is left for a future proposal.
+Not supported in this SIP. Type-level companion scope inference is left for a future proposal.
 
 #### Overload resolution
 
-> After overload arity narrowing — which may leave multiple candidates when default arguments are involved — if all remaining candidates have the **same parameter type** at the position where the unresolved identifier sits, companion inference fires against that shared type and normal overload selection disambiguates using the other arguments. If the candidates have **different** parameter types at that position, the use site is a "not found" or ambiguity error; the user disambiguates with the qualified name, a type ascription, or a non-overloaded wrapper.
+> After overload arity narrowing — which may leave multiple candidates when default arguments are involved — if all remaining candidates have the **same parameter type** at the position where the unresolved identifier sits, companion scope inference fires against that shared type and normal overload selection disambiguates using the other arguments. If the candidates have **different** parameter types at that position, the use site is a "not found" or ambiguity error; the user disambiguates with the qualified name, a type ascription, or a non-overloaded wrapper.
 
 This mirrors the `#X` draft's overload rule and the same flavour of rule that already governs target-typed `_` in Scala.
 
@@ -250,7 +250,7 @@ def foo(a: Animal): Unit = ???
 def foo(a: Color):  Unit = ???
 
 foo(Red)               // ERROR: candidates differ at parameter 0;
-                       //        companion inference cannot decide
+                       //        companion scope inference cannot decide
                        //        which expected type drives lookup.
 foo((Red: Color))      // OK — ascription pins expected type.
 
@@ -283,7 +283,7 @@ cs match
 
 #### Polymorphic inference
 
-Companion inference **does not** contribute back to type-parameter inference, but it does *consume* a type parameter that has already been fixed by other means:
+Companion scope inference **does not** contribute back to type-parameter inference, but it does *consume* a type parameter that has already been fixed by other means:
 
 ```scala
 Seq[Color](Red, Green)                       // OK — explicit type argument.
@@ -338,7 +338,7 @@ parse(INFO)
 
 #### Equality and inequality
 
-`==` and `!=` are defined on `Any`, so the right operand's expected type is `Any`. The companion of `Any` has no member named `Red`, `Blue`, etc., so companion inference does *not* help with equality comparisons. Users continue to write the fully qualified form for equality, or to use a typed comparison method:
+`==` and `!=` are defined on `Any`, so the right operand's expected type is `Any`. The companion of `Any` has no member named `Red`, `Blue`, etc., so companion scope inference does *not* help with equality comparisons. Users continue to write the fully qualified form for equality, or to use a typed comparison method:
 
 ```scala
 c == Red               // ERROR — expected type of RHS is Any.
@@ -379,7 +379,7 @@ These diagnostic requirements are *normative*: an implementation of this SIP tha
 
 #### Grammar
 
-No grammar changes. Companion inference is a pure resolution-rule extension; the parser is unaffected.
+No grammar changes. Companion scope inference is a pure resolution-rule extension; the parser is unaffected.
 
 ### Worked examples
 
@@ -430,7 +430,7 @@ val s: Shape = Shape(Triangle, Red)
 // Diagnostic includes the "Shape.Geometry.Triangle is available" hint.
 ```
 
-This is the one place where companion inference is *worse* than the `#X` draft: the user has to read the hint to recover from a silent shadow. The mitigation is diagnostic quality, not a syntactic anchor.
+This is the one place where companion scope inference is *worse* than the `#X` draft: the user has to read the hint to recover from a silent shadow. The mitigation is diagnostic quality, not a syntactic anchor.
 
 ### Compatibility
 
@@ -438,7 +438,7 @@ This is the one place where companion inference is *worse* than the `#X` draft: 
 
 The proposal is **monotonic with respect to existing code**:
 
-- A program that currently compiles compiles unchanged. Companion inference fires only when normal resolution fails, so every previously-resolved identifier resolves the same way.
+- A program that currently compiles compiles unchanged. Companion scope inference fires only when normal resolution fails, so every previously-resolved identifier resolves the same way.
 - A program that currently errors with "not found" may now compile, if the expected type's companion has a member of the unresolved name. This direction is the intended behaviour of the SIP.
 
 A consequence: **adding a member to a companion can make previously-erroring code compile** at a downstream call site. This is unusual but not unprecedented (adding a member to a wildcard-imported scope has a similar effect today). It cannot make a previously-passing program fail to compile.
@@ -451,7 +451,7 @@ This is the principal cost the user pays for the absence of a sigil. It cannot b
 
 #### Removal of companion members
 
-Removing a companion member is a source break for any downstream site that relied on companion inference to resolve that name. This is the same situation as removing any public API member.
+Removing a companion member is a source break for any downstream site that relied on companion scope inference to resolve that name. This is the same situation as removing any public API member.
 
 #### Binary and TASTy compatibility
 
@@ -463,10 +463,10 @@ No migration is needed. Existing code continues to compile with identical semant
 
 ### Feature interactions
 
-- **Implicit / given resolution.** Companion inference runs *before* implicit search and applies only to named members. Anonymous givens remain reachable through normal given resolution.
-- **Named arguments.** `f(color = Red)` works because the named argument fixes the expected type to that parameter's type, and companion inference runs against that type.
+- **Implicit / given resolution.** Companion scope inference runs *before* implicit search and applies only to named members. Anonymous givens remain reachable through normal given resolution.
+- **Named arguments.** `f(color = Red)` works because the named argument fixes the expected type to that parameter's type, and companion scope inference runs against that type.
 - **Default arguments.** Standard default-argument resolution is unchanged; the position's expected type is the parameter's declared type, against which inference fires.
-- **Polymorphic methods and type-parameter inference.** Companion inference consumes an established expected type but does not contribute back to type inference. If a type parameter is otherwise unconstrained, the user supplies an explicit type argument.
+- **Polymorphic methods and type-parameter inference.** Companion scope inference consumes an established expected type but does not contribute back to type inference. If a type parameter is otherwise unconstrained, the user supplies an explicit type argument.
 - **Opaque types.** Explicitly supported.
 - **Transparent type aliases, `import`, `export`.** Resolution dealiases before companion lookup.
 - **Union types.** Only `T | Null` reduces to `T`; other unions are hard errors.
@@ -478,7 +478,7 @@ No migration is needed. Existing code continues to compile with identical semant
 - **Tooling.** Completions follow the same rule: when the user types a bare identifier at a target-typed position, the presentation compiler offers candidates from both lexical scope and the expected type's companion, with the companion-sourced candidates marked. Hover / go-to-definition operates on the desugared `T.X` form.
 - **Cross-platform.** Pure desugaring; no JVM, JS, or Native specifics.
 
-## Empirical analysis: how often would companion inference fire?
+## Empirical analysis: how often would companion scope inference fire?
 
 The same TASTy-based scanner used to validate the `#X` draft ([soronpo/scala3 — `claude/scala-repo-scanner-script-FXi3I/sip80-scanner/`](https://github.com/soronpo/scala3/tree/claude/scala-repo-scanner-script-FXi3I/sip80-scanner)) measures the same set of positions here: any `Select(qual, name)` or `Ident(name)` whose expected type after reduction is a class with a companion that owns the symbol. Headline figures (full methodology and tables in the `#X` draft's §*Empirical analysis*):
 
@@ -507,7 +507,7 @@ Same semantics with an explicit leading-`#` sigil at the use site.
 | Apply shorthand | `#(args)` for `T.apply(args)` (optional extension) | Not available; user writes `T(args)` or `T.apply(args)` |
 | Chaining | `#Mammal.Dog` is explicit | `Mammal.Dog` works via fallback; only the leftmost segment uses inference |
 
-Neither draft dominates the other on every axis. The `#X` draft trades verbosity savings against new syntax; companion inference trades visual-anchor clarity against zero syntax.
+Neither draft dominates the other on every axis. The `#X` draft trades verbosity savings against new syntax; companion scope inference trades visual-anchor clarity against zero syntax.
 
 ### `.X` companion shorthand (the original draft of SIP-80)
 
@@ -527,7 +527,7 @@ This proposal rejects `relative import` as the primary form because it re-introd
 
 ### Restrict to enums only
 
-A scheme in which companion inference fires only when the expected type is an `enum`, leaving non-enum companion members (factory `def`s, sealed-trait case objects in hand-rolled hierarchies, opaque-type members) unaffected.
+A scheme in which companion scope inference fires only when the expected type is an `enum`, leaving non-enum companion members (factory `def`s, sealed-trait case objects in hand-rolled hierarchies, opaque-type members) unaffected.
 
 Rejected because the motivation — DSL builders, factory methods, opaque-type idioms — extends well beyond enums. Restricting to enums would privilege one specific ADT encoding over the others Scala supports.
 
@@ -556,9 +556,9 @@ This draft shares its motivation and cross-language survey with the `#X` draft o
 | OCaml        | `` `Tag x ``               | Production                     |
 | Java         | (none)                     | —                              |
 
-A specific cross-language note for this draft: every language above that has shipped a similar feature uses an explicit sigil at the use site. The sigil-free design proposed here has no direct precedent in this family. The closest analogue is **OCaml's polymorphic variants**, where the tag itself (`` `Red ``) carries no namespace at all and is unified structurally — but OCaml's mechanism is enabled by structural typing, not by a name-resolution fallback. Companion inference is therefore the most ambitious design point in the cross-language landscape: it asks the type checker to do work that other languages have chosen not to ask of theirs. The reward, if it works, is that Scala ends up with the lowest-ceremony form of this feature available in any modern statically-typed language.
+A specific cross-language note for this draft: every language above that has shipped a similar feature uses an explicit sigil at the use site. The sigil-free design proposed here has no direct precedent in this family. The closest analogue is **OCaml's polymorphic variants**, where the tag itself (`` `Red ``) carries no namespace at all and is unified structurally — but OCaml's mechanism is enabled by structural typing, not by a name-resolution fallback. Companion scope inference is therefore the most ambitious design point in the cross-language landscape: it asks the type checker to do work that other languages have chosen not to ask of theirs. The reward, if it works, is that Scala ends up with the lowest-ceremony form of this feature available in any modern statically-typed language.
 
-A `#`-as-companion-placeholder design was previously floated within Scala's own pre-SIP discussions in 2024: see [aggregate-literals pre-SIP, post #98](https://contributors.scala-lang.org/t/pre-sip-a-syntax-for-aggregate-literals/6697/98). That discussion is in progress and no official SIP has been submitted as of yet. Companion inference takes the opposite direction — eliminating the sigil entirely rather than refining its placement.
+A `#`-as-companion-placeholder design was previously floated within Scala's own pre-SIP discussions in 2024: see [aggregate-literals pre-SIP, post #98](https://contributors.scala-lang.org/t/pre-sip-a-syntax-for-aggregate-literals/6697/98). That discussion is in progress and no official SIP has been submitted as of yet. Companion scope inference takes the opposite direction — eliminating the sigil entirely rather than refining its placement.
 
 ## FAQ
 
@@ -566,7 +566,7 @@ A `#`-as-companion-placeholder design was previously floated within Scala's own 
 Yes, in the specific case where a local of unrelated type shares a name with a desired companion member. The mitigation is the normative diagnostic-quality requirement: every type-mismatch error must check whether the expected type's companion has a same-named member and, if so, surface that fact in the error message. The cost is a slightly less direct user experience than the `#X` draft's sigil form, in exchange for zero new syntax.
 
 **Won't I have to write `Color.Red` anyway when there's a name clash?**
-Yes — and that is the *only* time you have to qualify. In current Scala you qualify *every* time. Companion inference turns "always qualify" into "qualify when needed." The break-even point comes well below 50 % shadowing rate; in practice the shadowing rate in measured codebases is far lower (see *Empirical analysis* — most positions resolve cleanly).
+Yes — and that is the *only* time you have to qualify. In current Scala you qualify *every* time. Companion scope inference turns "always qualify" into "qualify when needed." The break-even point comes well below 50 % shadowing rate; in practice the shadowing rate in measured codebases is far lower (see *Empirical analysis* — most positions resolve cleanly).
 
 **Why not also look up `given` instances?**
 Anonymous givens are out of scope; this proposal is about static name lookup of *explicitly named* companion members. Named givens, like any other named term-level member, are eligible.
@@ -581,7 +581,7 @@ Yes — the alias's own companion is searched (from outside the defining module)
 Yes — `f(using Red)` resolves `Red` against the expected type of the `using` parameter.
 
 **How does this interact with the sibling `#X` draft?**
-The two drafts are competing approaches to the same underlying problem on the same SIP number; they share the target-type reduction machinery and most worked examples. They differ on whether the call site carries an explicit sigil. The committee may accept one and reject the other, or — if it sees the value in both — could accept companion inference as the default mechanism and the `#X` form as an opt-in escape hatch when the user wants to *force* companion lookup despite a shadow. Both drafts have been written so that this combined acceptance is technically possible.
+The two drafts are competing approaches to the same underlying problem on the same SIP number; they share the target-type reduction machinery and most worked examples. They differ on whether the call site carries an explicit sigil. The committee may accept one and reject the other, or — if it sees the value in both — could accept companion scope inference as the default mechanism and the `#X` form as an opt-in escape hatch when the user wants to *force* companion lookup despite a shadow. Both drafts have been written so that this combined acceptance is technically possible.
 
 **Why not just teach people to use wildcard imports?**
-That is the status quo, and it produces the namespace pollution this SIP is designed to avoid. Wildcard imports bring names into the *entire* enclosing scope; companion inference brings names into only the positions where the expected type matches. The two mechanisms are not interchangeable.
+That is the status quo, and it produces the namespace pollution this SIP is designed to avoid. Wildcard imports bring names into the *entire* enclosing scope; companion scope inference brings names into only the positions where the expected type matches. The two mechanisms are not interchangeable.
