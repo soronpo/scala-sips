@@ -15,9 +15,11 @@ title: Companion Scope Inference
 
 ## History
 
-| Date           | Version             |
-|----------------|---------------------|
-| May 12th 2026  | Initial Draft       |
+| Date           | Version                                       |
+|----------------|-----------------------------------------------|
+| May 5th 2026   | First draft: leading `.` sigil (`.X`)         |
+| May 7th 2026   | Second draft: leading `#` sigil (`#X`)        |
+| May 12th 2026  | Third draft: sigil-free companion scope inference |
 
 This is an alternative draft of SIP-80, proposing a sigil-free design alongside the `#X` draft on the same SIP number. Both drafts grew out of the open review on [PR #134](https://github.com/scala/improvement-proposals/pull/134). They share the same target-type reduction machinery; they differ only in how the call site signals "look in the companion." The `#X` draft uses an explicit sigil; this draft uses no surface marker and relies on the compiler falling back to the companion when normal name lookup fails.
 
