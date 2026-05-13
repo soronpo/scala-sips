@@ -474,7 +474,7 @@ No migration is needed. Existing code continues to compile with identical semant
 
 ### Other concerns
 
-- **Reference implementation.** Not yet started. The expected implementation surface is small: a single resolution-pass extension that, on an unresolved `Ident` with a known expected type, applies the target-type reduction (the same one used in the `#X` draft) and retries the lookup against the resulting companion. No grammar work, no new TASTy nodes, no encoding changes.
+- **Reference implementation.** A working implementation is available as scala/scala3 PR [#26056](https://github.com/scala/scala3/pull/26056). The implementation surface is small: a single resolution-pass extension that, on an unresolved `Ident` with a known expected type, applies the target-type reduction (the same one used in the `#X` draft) and retries the lookup against the resulting companion. No grammar work, no new TASTy nodes, no encoding changes.
 - **Tooling.** Completions follow the same rule: when the user types a bare identifier at a target-typed position, the presentation compiler offers candidates from both lexical scope and the expected type's companion, with the companion-sourced candidates marked. Hover / go-to-definition operates on the desugared `T.X` form.
 - **Cross-platform.** Pure desugaring; no JVM, JS, or Native specifics.
 
