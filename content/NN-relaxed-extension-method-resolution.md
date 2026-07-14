@@ -15,9 +15,10 @@ title: Relaxed Extension Method Resolution
 
 ## History
 
-| Date          | Version            |
-|---------------|--------------------|
-| Jul 14th 2026 | Initial Draft      |
+| Date          | Version                                             |
+|---------------|-----------------------------------------------------|
+| Jul 14th 2026 | Initial Draft                                       |
+| Jul 14th 2026 | Add most-specific selection within a precedence tier |
 
 ## Summary
 
@@ -39,9 +40,13 @@ even though a perfectly good extension method `m` is in scope one level out.
 This proposal changes extension-method resolution to fall back to the next
 enclosing precedence level when no candidate at the current level applies to the
 receiver, so that the *best extension method for the receiver type* is chosen,
-with lexical precedence used only as a tie-breaker. This restores parity with
-the pre-existing behaviour of Scala 2 `implicit class`es, which disambiguate by
-the extended type rather than by the method name.
+with lexical precedence used only as a tie-breaker. Additionally, when several
+candidates at the *same* precedence level apply, the most specific one is
+selected using ordinary overload-resolution specificity — the behaviour
+co-located overloaded extension methods already have — instead of reporting an
+ambiguity. Together these restore parity with the pre-existing behaviour of
+Scala 2 `implicit class`es, which disambiguate by the extended type rather than
+by the method name.
 
 ## Motivation
 
@@ -196,11 +201,46 @@ levels:
 2. Consider the groups from highest to lowest precedence. For the current group,
    try to typecheck `m(e)` for each candidate.
    - If exactly one candidate applies (its `m(e)` typechecks), pick it.
-   - If more than one candidate in the *same* group applies, report an
-     ambiguity error (this is the SIP-54 rule, including its "a single
-     non-wildcard import beats wildcard imports" refinement).
+   - If more than one candidate in the *same* group applies, select the **most
+     specific** one, using the same specificity rules that ordinary overload
+     resolution applies to the desugared extension methods. Only if there is no
+     unique most-specific candidate is the reference genuinely ambiguous and an
+     ambiguity error reported (retaining SIP-54's "a single non-wildcard import
+     beats wildcard imports" refinement, which is applied before specificity).
    - If no candidate in the group applies to the receiver, discard the whole
      group and move on to the next (lower-precedence) group.
+
+The specificity step is what makes cross-source resolution match the behaviour
+users already get from *co-located* overloaded extension methods. Given
+
+~~~ scala
+class Animal ; class Dog extends Animal
+object AB:
+  extension (a: Animal) def name = "animal"
+  extension (d: Dog)    def name = "dog"
+~~~
+
+`Dog().name` already resolves to the `Dog` overload today, because co-located
+extension methods desugar to overloaded methods and overload resolution picks
+the most specific. Splitting the two `name`s into separate objects and importing
+both, however, currently produces an ambiguity error. This proposal removes that
+asymmetry: whether the candidates are co-located, imported from several sources,
+or spread across precedence levels, the most specific applicable extension for
+the receiver is chosen.
+
+Note that specificity acts as a tie-break *within* a precedence tier, **after**
+lexical precedence. A closer, more *general* extension therefore still wins over
+a farther, more *specific* one — preserving intentional shadowing, and matching
+how implicit resolution prioritises scope before specificity:
+
+~~~ scala
+import A.*  // extension (a: Animal) def sound = "generic"
+import B.*  // extension (d: Dog)    def sound = "woof"
+(Dog(): Dog).sound     // "woof"    — most specific among same-level candidates
+locally:
+  extension (a: Animal) def sound = "local"
+  (Dog(): Dog).sound   // "local"   — a closer tier wins over the imported Dog
+~~~
 3. If no group yields an applicable candidate, resolution fails with the same
    diagnostic it would produce today for the closest candidate.
 
@@ -266,8 +306,11 @@ It is replaced by:
 >      If exactly one candidate leads to an expansion that typechecks without
 >      errors, pick that expansion. If several candidates at this level do, but
 >      only one of them is not a wildcard import, pick that one. If several
->      candidates at this level do and this rule does not disambiguate them,
->      report an ambiguous reference error.
+>      candidates at this level still remain, the most specific among them is
+>      selected, using the specificity relation of overload resolution applied to
+>      the candidates' extension methods (equivalently: to the methods they
+>      desugar to). If there is a unique most-specific candidate, pick it;
+>      otherwise report an ambiguous reference error.
 >    - If no candidate at the current level leads to an expansion that
 >      typechecks, the next lower precedence level is examined in the same way.
 >    - If no level yields an applicable candidate, report the error arising from
@@ -318,11 +361,17 @@ produces could already be written by hand today as a fully-qualified
   lexical resolution and implicit search is preserved.
 
 - **Overloading and specificity.** Within a single precedence level, if more
-  than one candidate applies and the SIP-54 tie-breaker does not resolve it, the
-  result is an ambiguity error rather than a silent choice. This proposal does
-  *not* introduce most-specific-overload selection across levels; the closer
-  level simply wins. This keeps the rule predictable and avoids surprising
-  "action at a distance".
+  than one candidate applies and the SIP-54 non-wildcard tie-breaker does not
+  resolve it, the most specific candidate is selected using the *same*
+  specificity relation as ordinary overload resolution. This is deliberately the
+  behaviour co-located overloaded extension methods already have (they desugar to
+  regular overloads), so cross-source resolution and co-located resolution agree.
+  Specificity is applied *within* a precedence tier only; it does **not** reach
+  across levels. Across levels the closer tier always wins (even if a farther
+  tier holds a more specific candidate), which preserves intentional shadowing
+  and mirrors how implicit resolution orders scope priority ahead of specificity.
+  A reference is reported ambiguous only when a single tier holds two or more
+  applicable candidates with no unique most-specific one.
 
 - **Error reporting.** When resolution ultimately fails, the diagnostic is taken
   from the highest-precedence level so the reported error matches the method the
@@ -341,12 +390,6 @@ produces could already be written by hand today as a fully-qualified
   mechanical and local, so this should be a modest change.
 
 ### Open questions
-
-- **Cross-level ambiguity vs. specificity.** Should two *equally applicable*
-  candidates at *different* levels ever be considered ambiguous, or is
-  "closer wins" always the right rule? This proposal takes the simplest,
-  most backward-compatible stance (closer wins, matching current shadowing), but
-  the alternative of a specificity-based comparison could be explored.
 
 - **Overloaded extension methods at the same owner.** When a single scope
   defines several same-named extension methods (true overloads), the current
@@ -369,6 +412,23 @@ produces could already be written by hand today as a fully-qualified
   selected for programs that compile today). The precedence-ordered-fallback
   design deliberately keeps lexical precedence authoritative whenever it is
   meaningful, changing behaviour only where the status quo is a hard error.
+
+- **Global most-specific selection (specificity before precedence).** Gather
+  *every* applicable candidate across all levels and pick the globally most
+  specific, ignoring lexical distance — the closest analogue to how a single
+  overload set is resolved. Rejected as the default because it discards
+  proximity-based shadowing for extensions: a locally-defined, more general
+  extension would fail to override a more specific one imported from elsewhere,
+  which is surprising and diverges from how implicit resolution tiers scope
+  priority ahead of specificity. This proposal keeps precedence authoritative and
+  uses specificity only to break ties *within* a tier.
+
+- **Report ambiguity instead of selecting the most specific candidate.** This was
+  SIP-54's choice for the same-level case. Rejected because it leaves a
+  gratuitous asymmetry with co-located overloaded extension methods, which
+  already resolve by specificity; users splitting extensions across sources (for
+  modularity or migration) would hit ambiguity errors that the equivalent
+  co-located code never produces.
 
 - **Only relax when the closest binding is an import (not a definition).** A
   narrower variant that leaves definition-level shadowing untouched. Rejected
@@ -393,10 +453,13 @@ produces could already be written by hand today as a fully-qualified
 
 ## FAQ
 
-**Does this make same-named extensions on the *same* type ambiguous?**
-No. When two candidates both apply to the receiver, the closer one shadows the
-farther one exactly as today; ambiguity is only reported for equally-applicable
-candidates at the *same* precedence level (the SIP-54 rule).
+**When are same-named extensions still ambiguous?**
+Only when a *single* precedence tier holds two or more candidates that all apply
+to the receiver and none is strictly more specific than the others — for example
+two extensions on the *same* receiver type imported from two sources. Candidates
+at different tiers are ordered by precedence (closer wins), and candidates within
+a tier that differ in specificity are ordered by specificity, so those cases
+resolve rather than erroring.
 
 **Can this change the method a currently-compiling program calls?**
 No. If a program compiles today, its call already resolved to an applicable
